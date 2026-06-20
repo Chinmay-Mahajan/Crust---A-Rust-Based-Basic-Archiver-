@@ -153,7 +153,7 @@ fn pack_archive(target_path:&str , files:Vec<String>)->Result<(), ArchiverError>
     archive_file.write_all(&count_bytes).map_err(|e| ArchiverError::IoError(e.to_string()))?;
     // writing to the archive file 
     // We pass it as a reference (&count_bytes) because write_all wants a byte slice (&[u8])
-    // 3. Loop through every file path to write its metadata header
+    // Loop through every file path to write its metadata header
     let mut payloads_to_write = Vec::new(); 
 
     for file_path in &files {
@@ -166,9 +166,9 @@ fn pack_archive(target_path:&str , files:Vec<String>)->Result<(), ArchiverError>
         let compressed_data = compress_rle(&file_contents);
 
         let (final_payload, compression_flag) = if compressed_data.len() < file_contents.len() {
-            (compressed_data, 1u8)  // RLE won! Use compressed data, flag = 1
+            (compressed_data, 1u8)  
         } else {
-            (file_contents, 0u8)   // RLE lost (inflation)! Fallback to raw data, flag = 0
+            (file_contents, 0u8)   
         };
 
         // let file_size: u64   // read the compressed file size
@@ -179,21 +179,21 @@ fn pack_archive(target_path:&str , files:Vec<String>)->Result<(), ArchiverError>
 
         let name_len = name_bytes.len() as u16;
 
-        // ---- WRITE TIME ----
         
-        // A. Write Name Length (2 bytes)
+        
+        //Write Name Length (2 bytes)
         archive_file.write_all(&name_len.to_be_bytes())
             .map_err(|e| ArchiverError::IoError(e.to_string()))?;
 
-        // B. Write the actual Filename bytes (Variable length)
+        //Write the actual Filename bytes (Variable length)
         archive_file.write_all(name_bytes)
             .map_err(|e| ArchiverError::IoError(e.to_string()))?;
 
-        // C. Write the comp. File Size (8 bytes)
+        //Write the comp. File Size (8 bytes)
         // archive_file.write_all(&compressed_size.to_be_bytes())
         //     .map_err(|e| ArchiverError::IoError(e.to_string()))?;
 
-        // write the comp flag
+        //Write the comp flag
         archive_file.write_all(&[compression_flag])
             .map_err(|e| ArchiverError::IoError(e.to_string()))?;
 
