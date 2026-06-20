@@ -1,3 +1,14 @@
+/*
+
+BECAUSE PDF AND JPEG ARE ALREADY IN A COMPRESSED FORM ie. they already have less no. of consecutive bytes. 
+We are using an algo called RLE (Run Length Encoding) , which represents data as pairs of count , byte . 
+if hypothetically a data has no consecutive equal bytes then we suffer a 2x increase in the memory. 
+
+However , while compressing we check whether we increase in size , if we do then we dont compress . if we dont then we compress.
+
+*/
+
+
 #[derive(Debug)]
 enum AppCommand {
     Pack { source_dir: String, target_archive: String },
@@ -71,7 +82,16 @@ fn get_files_in_dir(dir_path: &str) -> Result<Vec<String>, ArchiverError> {
         let entry = entry.map_err(|e| ArchiverError::IoError(e.to_string()))?;
         // since a file read (access) can fail we use map_err to convert the error to our custo Error Variant.
         let path = entry.path();
-
+        if let Some(file_name_os) = path.file_name() {
+                if let Some(file_name_str) = file_name_os.to_str() {
+                    
+                    // SKIP condition: If it starts with a dot, skip it 
+                    // ---> System files like .DS_STORE also got picked up , these inflate the file storage.
+                    if file_name_str.starts_with('.') {
+                        continue; // Jump straight to the next iteration of the loop
+                    }
+                }
+            }
         
         if path.is_file() {
             file_paths.push(path.display().to_string()); // convert a rust PathBuf object into a heap owned String 
@@ -80,6 +100,45 @@ fn get_files_in_dir(dir_path: &str) -> Result<Vec<String>, ArchiverError> {
 
     Ok(file_paths) // if everything goes well , return the result variant Ok with the file_path vector . 
 }
+
+fn compress_rle(input : &[u8])->Vec<u8>{
+    let mut compressed = Vec::new(); 
+    if input.is_empty(){return compressed; }
+    let mut count = 1 as u8 ; 
+    let mut current_byte = input[0]; 
+    for byte in &input[1..]{
+        if *byte == current_byte && count < u8::MAX{
+            count +=1; 
+        }
+        else {
+            compressed.push(count);
+            compressed.push(current_byte);
+            current_byte = *byte;
+            count = 1;
+        }
+    }
+    compressed.push(count);
+    compressed.push(current_byte);
+    compressed
+
+}
+
+fn decompress_rle(input : &[u8])->Vec<u8>{
+    let mut i = 0; 
+    let mut decompressed = Vec::new();
+    while (i+1<input.len()){
+        let count = input[i]; 
+        let byte = input[i+1]; 
+        for _ in 0..count{
+            decompressed.push(byte);
+        } 
+
+        i+=2;
+    }
+
+    decompressed
+}
+
 
 fn pack_archive(target_path:&str , files:Vec<String>)->Result<(), ArchiverError>{
     /*
@@ -95,17 +154,29 @@ fn pack_archive(target_path:&str , files:Vec<String>)->Result<(), ArchiverError>
     // writing to the archive file 
     // We pass it as a reference (&count_bytes) because write_all wants a byte slice (&[u8])
     // 3. Loop through every file path to write its metadata header
+    let mut payloads_to_write = Vec::new(); 
+
     for file_path in &files {
         // we dont want to lose ownership of the files vector hence passing it as a reference
         // Look up the file's size on the hard drive
-        let meta = fs::metadata(file_path)
-            .map_err(|e| ArchiverError::IoError(format!("Failed to get metadata for {}: {}", file_path, e)))?;
-        let file_size: u64 = meta.len();
+        let file_contents = fs::read(file_path)
+            .map_err(|e| ArchiverError::IoError(format!("Failed to read for {}: {}", file_path, e)))?;
+        
+        // attempting compression     
+        let compressed_data = compress_rle(&file_contents);
+
+        let (final_payload, compression_flag) = if compressed_data.len() < file_contents.len() {
+            (compressed_data, 1u8)  // RLE won! Use compressed data, flag = 1
+        } else {
+            (file_contents, 0u8)   // RLE lost (inflation)! Fallback to raw data, flag = 0
+        };
+
+        // let file_size: u64   // read the compressed file size
+        let payload_size = final_payload.len() as u64;
 
         // Convert the filename string into a slice of raw bytes
-        let name_bytes: &[u8] = file_path.as_bytes();
-        
-        // Measure the length of the filename and cast it to a u16 (2 bytes)
+        let name_bytes = file_path.as_bytes();
+
         let name_len = name_bytes.len() as u16;
 
         // ---- WRITE TIME ----
@@ -118,20 +189,35 @@ fn pack_archive(target_path:&str , files:Vec<String>)->Result<(), ArchiverError>
         archive_file.write_all(name_bytes)
             .map_err(|e| ArchiverError::IoError(e.to_string()))?;
 
-        // C. Write the File Size (8 bytes)
-        archive_file.write_all(&file_size.to_be_bytes())
+        // C. Write the comp. File Size (8 bytes)
+        // archive_file.write_all(&compressed_size.to_be_bytes())
+        //     .map_err(|e| ArchiverError::IoError(e.to_string()))?;
+
+        // write the comp flag
+        archive_file.write_all(&[compression_flag])
             .map_err(|e| ArchiverError::IoError(e.to_string()))?;
+
+        archive_file.write_all(&payload_size.to_be_bytes())
+            .map_err(|e| ArchiverError::IoError(e.to_string()))?;
+
+        payloads_to_write.push(final_payload);
     }
     println!("Successfully started archive! Wrote file count header: {}", total_files);
 
-    println!("Appending file payloads...");
-    for file_path in &files {
-        // Read the entire contents of the source file as raw bytes
-        let file_contents = fs::read(file_path).map_err(|e| ArchiverError::IoError(format!("Failed to read source file {}: {}", file_path, e)))?;
+    // println!("Appending file payloads...");
+    // for file_path in &files {
+    //     // Read the entire contents of the source file as raw bytes
+    //     let file_contents = fs::read(file_path).map_err(|e| ArchiverError::IoError(format!("Failed to read source file {}: {}", file_path, e)))?;
 
-        // Write the raw contents straight into our archive stream
-        // file_contents is a Vec<u8>, so we pass a reference slice &[u8] using &file_contents
-        archive_file.write_all(&file_contents).map_err(|e| ArchiverError::IoError(e.to_string()))?;
+    //     // Write the raw contents straight into our archive stream
+    //     // file_contents is a Vec<u8>, so we pass a reference slice &[u8] using &file_contents
+    //     archive_file.write_all(&file_contents).map_err(|e| ArchiverError::IoError(e.to_string()))?;
+    // }
+
+    println!("Appending compressed file payloads...");
+    for payload in payloads_to_write {
+        archive_file.write_all(&payload)
+            .map_err(|e| ArchiverError::IoError(e.to_string()))?;
     }
 
     println!("Successfully completed archive payload packaging!");
@@ -159,7 +245,7 @@ fn unpack_archive(archive_path: &str, target_dir: &str) -> Result<(), ArchiverEr
 
     // Loop 'total_files' times to parse metadata and extract payloads
     let mut extracted_metadata = Vec::new();
-
+    let mut compression_flag = 0;
     for i in 0..total_files {
         //Read Name Length (2 bytes)
         let mut name_len_buf = [0u8; 2];
@@ -175,6 +261,12 @@ fn unpack_archive(archive_path: &str, target_dir: &str) -> Result<(), ArchiverEr
         // Convert the byte vector into an actual Rust String safely
         let file_name = String::from_utf8(name_buf)
             .map_err(|e| ArchiverError::InvalidHeader)?; // If it's not valid UTF-8, the file is broken
+
+        let mut flag_buf = [0u8; 1];
+        archive_file.read_exact(&mut flag_buf)
+            .map_err(|e| ArchiverError::IoError(format!("Corrupted header reading compression flag for file {}: {}", i, e)))?;
+        compression_flag = flag_buf[0];
+
 
         //Read File Size (8 bytes)
         let mut size_buf = [0u8; 8];
@@ -197,6 +289,16 @@ fn unpack_archive(archive_path: &str, target_dir: &str) -> Result<(), ArchiverEr
         archive_file.read_exact(&mut payload_buf)
             .map_err(|e| ArchiverError::IoError(format!("Failed to read payload data: {}", e)))?;
 
+
+        let final_payload = if compression_flag == 1 {
+            println!("Inflating RLE stream for {}...", full_path);
+            decompress_rle(&payload_buf)
+        } else {
+            println!("Reading direct raw stream for {}...", full_path);
+            payload_buf // It wasn't compressed, use it exactly as it is!
+        };
+
+
         // Extract just the plain file name (e.g., "a.txt") from the stored path
         let path_handler = Path::new(&full_path);
         let plain_name = path_handler.file_name()
@@ -212,7 +314,7 @@ fn unpack_archive(archive_path: &str, target_dir: &str) -> Result<(), ArchiverEr
             .map_err(|e| ArchiverError::IoError(format!("Failed to create output file {:?}: {}", output_file_path, e)))?;
 
         // Dump the payload bytes into the file
-        new_file.write_all(&payload_buf)
+        new_file.write_all(&final_payload)
             .map_err(|e| ArchiverError::IoError(e.to_string()))?;
 
         println!("Extracted and restored: {:?}", output_file_path);

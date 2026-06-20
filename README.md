@@ -1,17 +1,19 @@
 # crust-archiver
 
-A tiny command-line archiver written in Rust, mostly as a way for me to actually understand binary file formats instead of just reading about them.
+A small command-line archiver written in Rust, built mainly so I could actually understand binary file formats and basic compression instead of just reading about them.
 
-It packs a folder of files into a single custom `.crust` archive, and can unpack that archive back into a folder. No compression, no encryption — just a straightforward binary layout I designed myself: a file count header, followed by per-file metadata (name length, name, size), followed by the raw file contents back to back.
+It packs a folder of files into a single custom `.crust` archive and can unpack that archive back into a folder. The format is something I designed myself: a file count header, followed by per-file metadata (name length, name, a compression flag, payload size), followed by the file payloads back to back.
 
 ## Why I made this
 
-I wanted to get comfortable with:
+I wanted to get hands-on with:
 - Reading/writing raw bytes in Rust (`u32`/`u16`/`u64` big-endian encoding)
+- Implementing Run-Length Encoding (RLE) from scratch
+- Per-file compression decisions instead of a blanket one-size-fits-all approach
 - Custom error types and `Result`/`?` error propagation
-- Basic file I/O without leaning on an existing archive crate
+- Basic file I/O without leaning on an existing library for the heavy lifting
 
-It's not meant to compete with `tar` or `zip` — it doesn't compress anything, doesn't handle nested directories yet, and the format is about as simple as it gets. Think of it as a learning exercise that happens to work.
+It's a learning project first. The format is simple on purpose, and there's a lot it doesn't do yet — see below.
 
 ## Usage
 
@@ -30,29 +32,29 @@ cargo run -- pack ./my_folder ./backup.crust
 cargo run -- unpack ./backup.crust ./restored_folder
 ```
 
-## How the format works (roughly)
+## How it works (roughly)
+
+Each file gets run through a simple RLE compressor before being written. RLE works well on data with long runs of repeated bytes, but can actually make some files bigger (data with no repeats at all roughly doubles in size under RLE). So before writing each file, the packer compares the compressed size to the original and only keeps the compressed version if it's actually smaller — otherwise it falls back to storing the file raw. A 1-byte flag per file records which path was taken, so unpacking knows whether to run the decompressor or just read the bytes straight through.
+
+Archive layout:
 
 ```
 [4 bytes]  total file count (u32, big-endian)
 for each file:
   [2 bytes]  filename length (u16)
   [N bytes]  filename
-  [8 bytes]  file size (u64)
+  [1 byte]   compression flag (1 = RLE compressed, 0 = stored raw)
+  [8 bytes]  payload size (u64)
 then, for each file (same order):
-  [file size bytes]  raw file contents
+  [payload size bytes]  file payload (compressed or raw, depending on the flag)
 ```
+
+Hidden files (anything starting with `.`, like `.DS_Store`) are skipped automatically while scanning a directory, since they were quietly bloating earlier versions of the archive.
 
 ## Known limitations
 
 - Only packs files in the top level of a directory — no recursion into subfolders yet
-- No compression, so archives will generally be larger than the originals combined
+- RLE is a pretty basic compression scheme, so gains depend entirely on how repetitive the input data is — already-compressed files like PDFs or JPEGs won't shrink much (the raw-fallback logic exists specifically for this case)
 - Filenames are stored as full paths at pack time but only the base filename is kept on unpack
-- Not really tested against huge files or weird filenames, so don't trust it with anything important yet
-
-## Possible next steps
-
-- Recursive directory packing
-- Maybe a checksum per file to catch corruption
-- Compression (probably the most useful missing piece)
-
+- Not tested much against huge files or unusual filenames yet, so treat it as experimental
 
