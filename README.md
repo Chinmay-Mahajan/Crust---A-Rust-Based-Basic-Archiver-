@@ -58,3 +58,11 @@ Hidden files (anything starting with `.`, like `.DS_Store`) are skipped automati
 - Filenames are stored as full paths at pack time but only the base filename is kept on unpack
 - Not tested much against huge files or unusual filenames yet, so treat it as experimental
 
+
+## Docker image
+
+The included Dockerfile builds the Rust binary in an rust:alpine stage and copies just the compiled crust executable into a python:3.11-alpine runtime image (the Python base is there because this image doubles as the sandbox the my-scratch-server MCP server's generate_and_pack_crust tool runs inside — see that repo for how it's invoked).
+
+bashdocker build -t crust-sandbox:latest .
+
+The container has no expectation of persistent storage — it's built to be booted, have files written into its internal filesystem via exec_run, run crust pack, stream the output back out as bytes, and be destroyed.
