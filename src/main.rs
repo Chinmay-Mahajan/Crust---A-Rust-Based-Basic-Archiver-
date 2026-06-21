@@ -170,7 +170,7 @@ fn pack_archive(target_path:&str , files:Vec<String>)->Result<(), ArchiverError>
         } else {
             (file_contents, 0u8)   
         };
-
+        println!("compression flag {compression_flag}");
         // let file_size: u64   // read the compressed file size
         let payload_size = final_payload.len() as u64;
 
@@ -277,12 +277,13 @@ fn unpack_archive(archive_path: &str, target_dir: &str) -> Result<(), ArchiverEr
         println!("Parsed Metadata -> File: '{}', Size: {} bytes", file_name, file_size);
 
         // Store this metadata map so we can use it to extract the content of the files
-        extracted_metadata.push((file_name, file_size));
+        extracted_metadata.push((file_name, file_size , compression_flag));
     }
 
     println!("Extracting file payloads...");
-    for (full_path, file_size) in extracted_metadata {
+    for (full_path, file_size , compression_flag) in extracted_metadata {
         // Create a buffer perfectly sized for this file's raw payload content
+        println!(" comp flag is {compression_flag}");
         let mut payload_buf = vec![0u8; file_size as usize];
         
         // Read exactly 'file_size' bytes out of the archive stream
